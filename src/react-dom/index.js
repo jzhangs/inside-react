@@ -26,8 +26,81 @@ function setAttribute(dom, name, value) {
   }
 }
 
+function diffNode(dom, vnode) {
+  let out = dom;
+
+  if (vnode === undefined || vnode === null || typeof vnode === 'boolean') vnode = '';
+  if (typeof vnode === 'number') vnode = String(vnode);
+
+  // diff text node
+  if (typeof vnode === 'string') {
+    // update text node directly if dom is text node
+    // nodeType: https://developer.mozilla.org/en-US/docs/Web/API/Node/nodeType
+    if (dom && dom.nodeType === Node.TEXT_NODE) {
+      if (dom.textContent !== vnode) {
+        dom.textContent = vnode;
+      }
+    } else {
+      out = document.createTextNode(vnode);
+      if (dom && dom.parentNode) {
+        dom.parentNode.replaceChild(out, dom);
+      }
+    }
+    return out;
+  }
+
+  if (typeof vnode.tag === 'function') {
+    return diffComponent(dom, vnode);
+  }
+
+  if (!dom || !isSameNodeType(dom, vnode)) {
+    out = document.createElement(vnode.tag);
+
+    if (dom) {
+      [...dom.childNodes].map(out.appendChild);    // move children to new nodes
+
+      if (dom.parentNode) {
+        dom.parentNode.replaceChild(out, dom);
+      }
+    }
+  }
+
+  if ((vnode.children && vnode.children.length > 0) || (out.childNodes && out.childNodes.length > 0)) {
+    diffChildren(out, vnode.children);
+  }
+
+  diffAttributes(out, vnode);
+  return out;
+}
+
+function diffComponent(dom, vnode) {
+  let c = dom && dom._component;
+  let oldDom = dom;
+
+  if (c && c.constructor === vnode.tag) {
+    setComponentProps(c, vnode.attrs);
+    dom = c.base;
+  } else {
+    if (c) {
+      unmountComponent(c);
+      oldDom = null;
+    }
+
+    c = createComponent(vnode.tag, vnode.attrs);
+    setComponentProps(c, vnode.attrs);
+    dom = c.base;
+    if (oldDom && dom !== oldDom) {
+      oldDom._component = null;
+      removeNode(oldDom);
+    }
+  }
+
+  return dom;
+}
+
 function createComponent(component, props) {
   let inst;
+
   if (component.prototype && component.prototype.render) {
     inst = new component(props);
   } else {
@@ -50,65 +123,148 @@ function setComponentProps(component, props) {
   renderComponent(component);
 }
 
-function _render(vnode) {
-  if (vnode === undefined || vnode === null || typeof vnode === 'boolean') vnode = '';
-  if (typeof vnode === 'number') vnode = String(vnode);
 
-  if (typeof vnode === 'string') {
-    let textNode = document.createTextNode(vnode);
-    return textNode;
+function unmountComponent(component) {
+  if (component.componentWillUnmount) component.componentWillUnmount();
+  removeNode(component.base);
+}
+
+function diffChildren(dom, vchildren) {
+  const domChildren = dom.childNodes;
+  const children = [];
+  const keyed = {};
+
+  if (domChildren.length > 0) {
+    for (let i = 0; i < domChildren.length; i++) {
+      const child = domChildren[i];
+      const key = child.key;
+      if (key) {
+        keyed[key] = child;
+      } else {
+        children.push(child);
+      }
+    }
   }
 
-  if (typeof vnode.tag === 'function') {
-    const component = createComponent(vnode.tag, vnode.attrs);
-    setComponentProps(component, vnode.attrs);
-    return component.base;
+  if (vchildren && vchildren.length > 0) {
+    let min = 0;
+    let childrenLen = children.length;
+    for (let i = 0; i < vchildren.length; i++) {
+      const vchild = vchildren[i];
+      const key = vchild.key;
+      let child;
+
+      if (key) {
+        if (keyed[key]) {
+          child = keyed[key];
+          keyed[key] = undefined;
+        }
+      } else if (min < childrenLen) {
+        for (let j = min; j < childrenLen; j++) {
+          let c = children[j];
+          if (c && isSameNodeType(c, vchild)) {
+            child = c;
+            children[j] = undefined;
+            if (j === childrenLen - 1) childrenLen--;
+            if (j === min) min++;
+            break;
+          }
+        }
+      }
+
+      child = diffNode(child, vchild);
+      const f = domChildren[i];
+      if (child && child !== dom && child !== f) {
+        if (!f) {
+          dom.appendChild(child);
+        } else if (child === f.nextSibling) {
+          removeNode(f);
+        } else {
+          dom.insertBefore(child, f);
+        }
+      }
+    }
+  }
+}
+
+function diffAttributes(dom, vnode) {
+  const old = {};
+  const attrs = vnode.attrs;
+
+  for (let i = 0; i < dom.attributes.length; i++) {
+    const attr = dom.attributes[i];
+    old[attr.name] = attr.value;
   }
 
-  const dom = document.createElement(vnode.tag);
-
-  if (vnode.attrs) {
-    Object.keys(vnode.attrs).forEach(key => {
-      const value = vnode.attrs[key];
-      setAttribute(dom, key, value);
-    });
+  for (let name in old) {
+    if (!(name in attrs)) {
+      setAttribute(dom, name, undefined);
+    }
   }
 
-  if (vnode.children) {
-    vnode.children.forEach(child => render(child, dom));
+  for (let name in attrs) {
+    if (old[name] !== attrs[name]) {
+      setAttribute(dom, name, attrs[name]);
+    }
+  }
+}
+
+function isSameNodeType(dom, vnode) {
+  if (typeof vnode === 'string' || typeof vnode === 'number') {
+    return dom.nodeType === 3;
   }
 
-  return dom;
+  if (typeof vnode.tag === 'string') {
+    return dom.nodeName.toLowerCase() === vnode.tag.toLowerCase();
+  }
+
+  return dom && dom._component && dom._component.constructor === vnode.tag;
+}
+
+function removeNode(dom) {
+  if (dom && dom.parentNode) {
+    dom.parentNode.removeChild(dom);
+  }
 }
 
 export function renderComponent(component) {
   let base;
   const renderer = component.render();
+
   if (component.base && component.componentWillUpdate) {
     component.componentWillUpdate();
   }
 
-  base = _render(renderer);
+  base = diffNode(component.base, renderer);
 
   if (component.base) {
-    if (component.componentDidUpdate) component.componentDidUpdate();
-  } else if (component.componentDidMount) {
-    component.componentDidMount();
-  }
-
-  if (component.base && component.base.parentNode) {
-    component.base.parentNode.replaceChild(base, component.base);
+    component.componentDidUpdate&& component.componentDidUpdate();
+    return;
   }
 
   component.base = base;
   base._component = component;
+  component.componentDidMount && component.componentDidMount();
 }
 
-function render(vnode, container) {
-  return container.appendChild(_render(vnode));
+/**
+ * @param {HTMLElement} dom
+ * @param {vnode} vnode
+ * @param {HTMLElement} container
+ * @returns {HTMLElement}
+ */
+function diff(dom, vnode, container) {
+  const ret = diffNode(dom, vnode);
+  if (container && ret.parentNode !== container) {
+    container.appendChild(ret);
+  }
+  return ret;
+}
+
+function render(vnode, container, dom) {
+  return diff(dom, vnode, container);
 }
 
 export default {
-  render,
-  renderComponent
+  render
 }

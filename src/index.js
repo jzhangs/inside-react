@@ -45,6 +45,30 @@ class Counter extends React.Component {
 //   }
 // }
 
+// class App extends React.Component {
+//   constructor() {
+//     super();
+//     this.state = {
+//       num: 0
+//     }
+//   }
+
+//   componentDidMount() {
+//     for (let i = 0; i < 100; i++) {
+//       this.setState({ num: this.state.num + 1 });
+//       console.log(this.state.num);
+//     }
+//   }
+
+//   render() {
+//     return (
+//       <div className="App">
+//         <h1>{this.state.num}</h1>
+//       </div>
+//     );
+//   }
+// }
+
 ReactDOM.render(
   <Counter />,
   document.getElementById('root')
